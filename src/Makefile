@@ -8,7 +8,7 @@ LEX = flex
 LFLAGS = -p -8 -Ce
 LIBS = -lfl
 OBJECTS = AnchorAnalysis.o DiffAlgorithm.o Lexer.o NDiff.o \
-					SuffixArray.o TokenLexer.o LosslessOptimizer.o
+	  SuffixArray.o TokenLexer.o LosslessOptimizer.o
 
 ndiff: $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
