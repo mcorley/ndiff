@@ -8,43 +8,48 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "token.h"
-#include <algorithm>
-#include <vector>
+#include "SuffixArray.h"
+#include "Token.h"
+#include <cstdio>
 
-SuffixArray::init(const std::vector<Token> &tokArray0, 
-                  const std::vector<Token> &tokArray1) {
-  // The DC3 algorithm requires the following constraints on the input:
-  // 1) Symbols in the input must be non-negative (because of radix sort)
-  // 2) The size() of the input must be >= 2
-  // 3) The capacity of the suffix array must be >= input.size()+3 (padding)
-  const int length = tokArray0.size() + tokArray1.size() + 2;
-	const int paddedLength = length + 3;
-  std::vector<int> unsortedIndexPoints;
-  for (int i = 0, e = tokArray0.size(); i < e; ++i)
-    unsortedIndexPoints.push_back(tokArray0.equiv);
-  for (int i = 0, e = tokArray1.size(); i < e; ++i)
-    unsortedIndexPoints.push_back(tokArray1.equiv);
-  unsortedIndexPoints.resize(paddedLength, 0);
-  const int max = *max_element(unsortedIndexPoints.begin(), 
-                               unsortedIndexPoints.end());
-  build(&UnsortedIndexes[0], &sortedIndexPoints_[0], length, max);
-  lcpArray_ = computeLCPs(unsortedIndexPoints, sortedIndexPoints_);
+void SuffixArray::init(const std::vector<Token> sourceTokenStream,
+                       const std::vector<Token> targetTokenStream) {
+  // Assign index points to the tokens. Index points are assigned 
+  // token by token and hence we can search with the suffix array 
+  // at any positions later.
+  const int size = sourceTokenStream.size() + targetTokenStream.size() + 2;
+  std::vector<int> indexPoints;
+  indexPoints.reserve(size);
+  for (int i = 0; i < 2; ++i) {
+    std::vector<Token> tokStream = (i==0) ? sourceTokenStream : targetTokenStream;
+    for (int j = 0, e = tokStream.size(); j != e; ++j)
+      indexPoints.push_back(tokStream[j].getHashValue());
+    indexPoints.push_back(i); // Sentinel.
+  }
+  // Run DC3 and compute the lcp array.
+  // DC3 requires at least 3 elements of padding at the end.
+  indexPoints.resize(size + 3, 0);  
+  orderedIdxPoints = DC3(indexPoints);
 
-  // A sorted version of the lcp array allows us to find common substrings in 
-  // order of decreasing size. We might care about finding common substrings 
-  // in this order since it helps with detemrining if a common substrings is 
-  // maxinal. Since most values in the lcp array have a 0 value, by first 
-  // removing all lcps of length <= 1, we can greatly improve the efficency of 
-  // the sort while still leaving all interesting results.
-  sortedLcpArray_.reserve(length);
-  for (int i = 0, e = length; i < e; ++i)
-    if (lcpArray_[i] > 1) sortedLcpArray_.push_back(lcpArray_[i]);
-	std::sort(sortedLcpArray_.begin(), sortedLcpArray_.end());
+  // Drop padding.
+  indexPoints.resize(size);
+
+  // Compute the lcps
+  lcps = computeLCPs(indexPoints, orderedIdxPoints);
+  orderedlcps = orderLCPs(lcps);
 }
 
-SuffixArray::build(int* s, int* SA, int n, int K) {
-  int n0=(n+2)/3, n1=(n+1)/3, n2=n/3, n02=n0+n2; 
+std::vector<int> SuffixArray::DC3(std::vector<int> indexPoints) {
+  int n = indexPoints.size() - 3;
+  int max = *std::max_element(indexPoints.begin(), indexPoints.end());
+  std::vector<int> result;
+  result.resize(n);
+  DC3(&indexPoints[0], &result[0], n, max);
+  return result;
+}
+
+void SuffixArray::DC3(int* s, int* SA, int n, int K) {
+	int n0=(n+2)/3, n1=(n+1)/3, n2=n/3, n02=n0+n2; 
 	int* s12  = new int[n02 + 3];  s12[n02]= s12[n02+1]= s12[n02+2]=0; 
 	int* SA12 = new int[n02 + 3]; SA12[n02]=SA12[n02+1]=SA12[n02+2]=0;
 	int* s0   = new int[n0];
@@ -79,7 +84,7 @@ SuffixArray::build(int* s, int* SA, int n, int K) {
 
 	// recurse if names are not yet unique
 	if (name < n02) {
-		suffixArray(s12, SA12, n02, name);
+		DC3(s12, SA12, n02, name);
 		// store unique names in s12 using the suffix array 
 		for (int i = 0;  i < n02;  i++) s12[SA12[i]] = i + 1;
 	} else // generate the suffix array of s12 directly
@@ -94,7 +99,7 @@ SuffixArray::build(int* s, int* SA, int n, int K) {
 #define GetI() (SA12[t] < n0 ? SA12[t] * 3 + 1 : (SA12[t] - n0) * 3 + 2)
 		int i = GetI(); // pos of current offset 12 suffix
 		int j = SA0[p]; // pos of current offset 0  suffix
-		if (SA12[t] < n0<Mouse>C!!< ? 
+		if (SA12[t] < n0 ? 
 				leq(s[i],       s12[SA12[t] + n0], s[j],       s12[j/3]) :
 				leq(s[i],s[i+1],s12[SA12[t]-n0+1], s[j],s[j+1],s12[j/3+n0]))
 		{ // suffix from SA12 is smaller
@@ -109,33 +114,10 @@ SuffixArray::build(int* s, int* SA, int n, int K) {
 			}
 		}  
 	} 
-	delete [] s12; delete [] SA12; delete [] SA0; delete [] s0;
+	delete [] s12; delete [] SA12; delete [] SA0; delete [] s0; 
 }
 
-std::vector<int> SuffixArray::computeLCPs(const std::vector<int> &unsortedIndexes, 
-                                          const std::vector<int> &sortedIndexes) {
-  int n = unsortedIndexes.size();
-	vector<int> rank(n, 0);
-  vector<int> lcp(n, 0);
-	for (int i = 0; i < n; i++)
-		rank[sa[i]] = i;
-	int h = 0;
-	for (int i = 0; i < n; i++) {
-		int k = rank[i];
-		if (k == 0) 
-			lcp[k] = 0;
-		else {
-			int j = sa[k-1];
-			while ((i+h <= n) && (j+h <= n) && 
-          (t[i+h] == t[j+h])) h++;
-			lcp[k] = h;
-		}
-		if (h > 0) h--;
-	}
-  return lcp;
-}
-
-void radixPass(int* a, int* b, int* r, int n, int K) {
+void SuffixArray::radixPass(int* a, int* b, int* r, int n, int K) {
   int* c = new int[K + 1];                          // counter array
   for (int i = 0;  i <= K;  i++) c[i] = 0;         // reset counters
   for (int i = 0;  i < n;  i++) c[r[a[i]]]++;    // count occurences
@@ -144,5 +126,50 @@ void radixPass(int* a, int* b, int* r, int n, int K) {
   }
   for (int i = 0;  i < n;  i++) b[c[r[a[i]]]++] = a[i];      // sort
   delete [] c;
+}
+
+std::vector<int> SuffixArray::computeLCPs(const std::vector<int> &indexPoints,
+                                          const std::vector<int> &orderedIdxPoints) {
+  const int n = indexPoints.size();
+  std::vector<int> LCPs(n);
+
+  // Initilaze the rank array. 
+	std::vector<int> rank(n);
+	for (int i = 0, e = n; i < e; ++i)
+		rank[orderedIdxPoints[i]] = i;
+
+	int h = 0;
+	for (int i = 0, e = n; i < e; ++i) {
+		int k = rank[i];
+		if (k == 0) {
+			LCPs[k] = 0;
+    } else {
+			int j = orderedIdxPoints[k - 1];
+			while (i+h <= n && 
+             j+h <= n && 
+             indexPoints[i+h] == indexPoints[j+h]) 
+        h++;
+			LCPs[k] = h;
+		}
+		if (h > 0) 
+      h--;
+	}
+  return LCPs;
+}
+
+std::vector<int> SuffixArray::orderLCPs(const std::vector<int> &LCPs) {
+  const int n = LCPs.size();
+  std::vector<int> longestFirstLCPs;
+  longestFirstLCPs.reserve(n);
+
+  // We can reduce the overhead of sorting the entire vector of lcp values by 
+  // eliminating small values below some threshold. Also, in practice we notice
+  // that a bulk of the values are 0, which are worthless to keep anyway.
+  const int cutoff = 1;
+  for (int i = 0; i < n; ++i)
+    if (LCPs[i] > cutoff) 
+      longestFirstLCPs.push_back(LCPs[i]);
+	std::sort(longestFirstLCPs.begin(), longestFirstLCPs.end());
+  return longestFirstLCPs;
 }
 

@@ -8,23 +8,39 @@
 //
 //===----------------------------------------------------------------------===
 
-class DiffBlock;
+#include "DiffBlock.h"
+#include <list>
+#include <string>
+#include <vector>
+
 class Token;
 
-/// Wrapper around GNU Diff.
+/// DiffAlgorithm - Wrapper class around the GNU diff file comparison utility.
 class DiffAlgorithm {
 public:
+  DiffAlgorithm() {}
+  ~DiffAlgorithm() {}
+
   /// Creates two temporary files where each line of the file holds one token. 
   /// When then execute the diff command with the popen function and parse the 
   /// results.
-  std::vector<DiffBlock> computeDifference(const std::vector<Token> &tokArray0, 
-                                           const std::vector<Token> &tokArray1);
+  std::list<DiffBlock> computeDifference(const std::vector<Token> &sourceTokenStream, 
+                                         const std::vector<Token> &targetTokenStream);
+
+  /// captureEqualities - The DiffBlocks returned by diff only represent the
+  /// changes (insertions and deltions) that occured in the sourceTokenStream
+  /// and the targetTokenStream. This method traverses the list of DiffBlocks
+  /// and captures the missing equalities to provide a more complete result.
+  std::list<DiffBlock> captureEqualities(
+      const std::list<DiffBlock> &DBs,
+      const std::vector<Token> &sourceTokenStream, 
+      const std::vector<Token> &targetTokenStream);
 private:
   /// Parse diffs.
   void processDiff(const std::string &changecmd, 
-                   const std::vector<Token> &tokArray0,
-                   const std::vector<Token> &tokArray1, 
-                   std::vector<DiffBlock> &block_list);
+                   const std::vector<Token> &sourceTokenStream, 
+                   const std::vector<Token> &targetTokenStream, 
+                   std::list<DiffBlock> &DBs);
 
   /// Parse a normal format diff control string.  Return the type of the
   /// diff (ERROR if the format is bad).  All of the other important
@@ -38,7 +54,7 @@ private:
   /// to that number.  In general these numbers are interpreted as ranges
   /// inclusive, unless being used by the ADD or DELETE commands.  It is
   /// assumed that these will be special cased in a superior routine.   
-  void processDiffControl(const std::string &changecmd, DiffBlock &db);
+  Operation processDiffControl(const std::string &changecmd, int ranges[2][2]);
 
   /// Skip whitespace.
   static inline const char *skipwhite(const char *s);

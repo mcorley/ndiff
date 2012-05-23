@@ -11,43 +11,47 @@
 #include "Token.h"
 #include "TokenLexer.h"
 #include <cstdio>
-#include <map>
-#include <string>
-#include <vector>
 
-vector<Token> TokenLexer::tokenize(const std::string &filename);
-{
-  int equiv, sym;
-  std::vector<Token> tokArray;
-  std::map<std::string, int>::iterator eq;
+std::vector<Token> TokenLexer::tokenize(const std::string &filename) {
+  std::vector<Token> tokenStream;
+  if (!(yyin = fopen(filename.c_str(), "r")))
+    return tokenStream;
 
-  if ((yyin = fopen(filename, "r"))) {
-    int line_pos = 0, prev_line = 1;
-    // Walk the files, pulling out a substring for each token. and
-    // simultaneously compute the equivalence class for each token.
-    for (yylineno = 1;  sym = yylex(); ) {
-      if (sym == TOK_WS) {
-        equiv = -1;
-      } else if ((eq = equivclasses.find(yytext)) != equivclasses.end()) {
-        equiv = (*eq).second;
-      } else { // Create a new equivalence class.
-        equiv = equivs_index++;
-        equivclasses.insert(pair<string,int>(yytext,equiv));
-      }
-      int file_pos = tokArray.size();
-      if (prev_line == yylineno) {
-        line_pos++;
-      } else { 
-        prev_line++;
-        line_pos = 1;
-      }
-      tokArray.push_back(Token(yytext, 
-                               yylineno, 
-                               equiv, 
-                               file_pos, 
-                               line_pos));
+  // Initilize location data.
+  int col = 0, line = 1; 
+  yylineno = 1;
+
+  for (int sym; sym = yylex();) {
+
+    // Assign a hash value if not whitespace.
+    int hashVal = -1;
+    if (sym != TOK_WS) {
+      std::map<std::string, int>::iterator 
+        i(tokenHashMap.find(yytext)), e(tokenHashMap.end());
+      if (i == e) {
+        hashVal = nextHashValue++;
+        tokenHashMap.insert(std::pair<std::string, int>(yytext, hashVal));          
+      } else
+        hashVal = (*i).second;        
     }
-    fclose(yyin);	
+
+    // Update location data.
+    const int offset = tokenStream.size();
+    if (line != yylineno) { col = 1; ++line; } 
+    else { ++col; }    
+
+    // Create a Token object with the data for this lexed token.
+    Token tok(yytext, hashVal, offset, line, col);
+
+    // Set appropriate flags.
+    if (!tokenStream.empty() && tokenStream.back().isWhitespace()) 
+      tok.setFlagValue(Token::leadingSpace, true);
+    if (col == 1) tok.setFlagValue(Token::startOfLine, true);
+    if (sym == TOK_WS) tok.setFlagValue(Token::whitespace, true);
+
+    // Add the token 
+    tokenStream.push_back(tok);    
   }
-  return tokArray;
+  fclose(yyin);	
+  return tokenStream;
 }

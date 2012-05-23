@@ -8,142 +8,241 @@
 //
 //===----------------------------------------------------------------------===
 
-#include "diffblock.h"
-#include "token.h"
-#include <cstdio>
-#include <vector>
+#include "DiffAlgorithm.h"
+#include "DiffBlock.h"
+#include "Token.h"
 
-std::vector<DiffBlock> DiffAlgorithm::computeDifference(const std::vector<Token> &tokArray0, 
-                                                        const std::vector<Token> &tokArray1) {
-  string tmpfiles[2];
-  for (int f = 0; f < 2; ++f) {
+#include <cstdio>
+#include <cstdlib>
+
+#include <iostream>
+
+std::list<DiffBlock> DiffAlgorithm::computeDifference(
+    const std::vector<Token> &sourceTokenStream, 
+    const std::vector<Token> &targetTokenStream) {
+  // Create two temporary files from the token data. Tokens are interspersed 
+  // with newline characters yielding diff to operate with token granularity.
+  // We use the mkstemp() function which generates a unique temporary filename 
+  // from template, creates and opens the file, and returns an open file 
+  // descriptor for the file. The last six characters of template must be 
+  // "XXXXXX" and these are replaced with a string that makes the filename 
+  // unique. Since it will be modified, template must not be a string constant, 
+  // but should be declared as a character array. Also, since mkstemp sets the 
+  // O_EXCL flag, we need to first close the file before calling popen.
+  std::string tmpfile[2];
+  for (int i = 0; i < 2; ++i) {
+    std::vector<Token> tokenStream = (i==0) ? sourceTokenStream : targetTokenStream;
     char tmpname[] = "/tmp/ndiff.XXXXXX";
     FILE *fpt = fdopen(mkstemp(tmpname), "w");
-    tmpfiles[f] = tmpname;
-    for (int i = 0; i < files[f].size(); ++i) {
-      fputs(files[f][i].chars.c_str(), fpt);
+    tmpfile[i] = tmpname;
+    for (int j = 0, e = tokenStream.size(); j < e; ++j) {
+      fputs(tokenStream[j].getCharData().c_str(), fpt);
       fputc('\n', fpt);
     }
-    // mkstemp sets the O_EXCL flag preventing us from opening the
-    // file again with popen, so we need to first close the file.
     fclose(fpt);
   }
 
-	const string command = "diff -a " + tmpfiles[0] + " " + tmpfiles[1];
-  FILE *fpipe = popen(command.c_str(), "r");
-  if (fpipe == NULL) {
+  // Initilize the diff shell command line. The -a option tells diff to treat 
+  // all files as text and compare them line-by-line, i.e. token-by-token, even 
+  // if they do not seem to be text. This command is passed to /bin/sh using 
+  // the -c flag; interpretation is performed by the shell.
+	const std::string command = "diff -a " + tmpfile[0] + " " + tmpfile[1];
+
+  // Create a pipe and fork invoking the shell with the above diff command. The 
+  // resulting read-only stream is in the normal diff output format.
+  // Normal format output looks like this:
+  //  change-command
+  //  < from-file-line
+  //  < from-file-line...
+  //  ---
+  //  > to-file-line
+  //  > to-file-line...
+  // For our purposes, we only need the change-commands, and all other lines
+  // from the output can be ignored.
+  FILE *diffNormalOut = popen(command.c_str(), "r");
+  if (diffNormalOut == NULL) {
     perror(command.c_str());
   }
  	char changecmd[2048];
-  vector<DiffBlock> block_list;
-	while (fgets(changecmd, 2048, fpipe)) {
-    if ((changecmd[0] != '>') && (changecmd[0] != '<') && (changecmd[0] != '-')) 
-      processDiff(changecmd, files, block_list);
+  std::list<DiffBlock> DBs;
+	while (fgets(changecmd, 2048, diffNormalOut)) {
+    if ((changecmd[0] == '>') || (changecmd[0] == '<') || (changecmd[0] == '-')) 
+      continue;
+    processDiff(changecmd, sourceTokenStream, targetTokenStream, DBs);
   }
+
+  // Diff blocks returned by diff don't capture the equalities so we need to
+  // take care of this manually to get a more complete diff result.  
+  DBs = captureEqualities(DBs, sourceTokenStream, targetTokenStream);
+
   // Cleanup and return the list of DiffBlocks.
-  pclose(fpipe);
-  for (int f = 0; f < 2; ++f)
-    remove(tmpfiles[f].c_str());
-  return block_list;
+  pclose(diffNormalOut);
+  for (int i = 0; i < 2; ++i)
+    remove(tmpfile[i].c_str());
+  return DBs;
+}
+
+std::list<DiffBlock> DiffAlgorithm::captureEqualities(
+      const std::list<DiffBlock> &DBs,
+      const std::vector<Token> &sourceTokenStream, 
+      const std::vector<Token> &targetTokenStream) {
+  // Pointers into the source and target token streams that help us identify 
+  // the equalities we failed to capture during the diff algorithm. At any given
+  // time during the execution of this method, the pointers are at the start of
+  // a pure delete, a pure insert, or a sequence of common tokens we need
+  // capture followed by a deletion or insertion.
+  std::vector<Token>::const_iterator srcStreamPtr(sourceTokenStream.begin());
+  std::vector<Token>::const_iterator tgtStreamPtr(targetTokenStream.begin());
+
+  std::list<DiffBlock> result; // Results go here.
+  std::list<DiffBlock>::const_iterator i(DBs.begin()), e(DBs.end());
+  for (; i != e; ++i) {
+    // Reference to the current DiffBlock.
+    const DiffBlock &DB = *i;
+
+    // If the current DiffBlock represents deleted tokens and the srcStreamPtr
+    // is at the start of these tokens, we have a pure delete. That is, there
+    // are no common tokens we need to capture.
+    if (DB.getOperation() == DELETE && 
+        DB.getTokens().front() == *srcStreamPtr) {
+      result.push_back(DB);
+      srcStreamPtr += DB.getTokens().size();
+      continue;
+    }
+
+    // If the current DiffBlock represents inserted tokens and the tgtStreamPtr
+    // is at the start of these tokens, we have a pure insertion. That is, there
+    // are no common tokens we need to capture.
+    if (DB.getOperation() == INSERT && 
+        DB.getTokens().front() == *tgtStreamPtr) {
+      result.push_back(DB);
+      tgtStreamPtr += DB.getTokens().size();
+      continue;
+    }
+
+    // Before this DiffBlock, there are common tokens to both token streams we
+    // need to capture and create a new DiffBlock for. Both the source and
+    // target stream pointers point to the start of the equality and it runs
+    // until we reach the begining of the current DiffBlock. Walk this run.
+    std::vector<Token> equality; 
+    while (srcStreamPtr < sourceTokenStream.end() &&
+           tgtStreamPtr < targetTokenStream.end() &&
+           *srcStreamPtr < DB.getTokens().front()) {
+      equality.push_back(*srcStreamPtr);
+      ++srcStreamPtr;
+      ++tgtStreamPtr;
+    }
+    result.push_back(DiffBlock(EQUAL, equality));
+
+    // Add the current DiffBlock and increment the appropirate stream pointer.
+    if (DB.getOperation() == DELETE) 
+      srcStreamPtr += DB.getTokens().size();
+    else 
+      tgtStreamPtr += DB.getTokens().size();
+    result.push_back(DB);
+  }
+
+  return result;
 }
 
 void DiffAlgorithm::processDiff(const std::string &changecmd, 
-                                const std::vector<Token> &tokArray0,
-                                const std::vector<Token> &tokArray1, 
-                                std::vector<DiffBlock> &block_list) {
-  DiffBlock db;
-  processDiffControl(changecmd, db);
-  switch (db.operation) {
-    case INSERT: {
-      const int index1 = db.ranges[FILE1][RANGE_START];
-      const int inserted = db.ranges[FILE1][RANGE_END];
-      for (int i = index1 - 1; i < inserted; ++i)
-        db.inserted.push_back(filevec[FILE1][i]);
-      break;
-    }
-    case SUBST: {
-      const int index0 = db.ranges[FILE0][RANGE_START];
-      const int deleted = db.ranges[FILE0][RANGE_END];
-      for (int i = index0 - 1; i < deleted; ++i)
-        db.deleted.push_back(filevec[FILE0][i]);
-      const int index1 = db.ranges[FILE1][RANGE_START];
-      const int inserted = db.ranges[FILE1][RANGE_END];
-      for (int i = index1 - 1; i < inserted; ++i)
-        db.inserted.push_back(filevec[FILE1][i]);
-      break;
-    }
+                                const std::vector<Token> &sourceTokenStream, 
+                                const std::vector<Token> &targetTokenStream, 
+                                std::list<DiffBlock> &DBs) {
+  int ranges[2][2];
+  Operation op = processDiffControl(changecmd, ranges);
+  std::vector<Token> deleted, inserted;
+
+  switch (op) {
     case DELETE: {
-      const int index0 = db.ranges[FILE0][RANGE_START];
-      const int deleted = db.ranges[FILE0][RANGE_END];
-      for (int i = index0 - 1; i < deleted; ++i)
-        db.deleted.push_back(filevec[FILE0][i]);
-      break;
+      for (int i = ranges[0][0] - 1; i < ranges[0][1]; ++i) 
+        deleted.push_back(sourceTokenStream[i]);
+      DBs.push_back(DiffBlock(DELETE, deleted));
+      return;
+    }
+    case INSERT: {
+      for (int i = ranges[1][0] - 1; i < ranges[1][1]; ++i) 
+        inserted.push_back(targetTokenStream[i]);
+      DBs.push_back(DiffBlock(INSERT, inserted));
+      return;
+    }    
+    case SUBST: {
+      for (int i = ranges[0][0] - 1; i < ranges[0][1]; ++i) 
+        deleted.push_back(sourceTokenStream[i]);
+      DBs.push_back(DiffBlock(DELETE, deleted));
+
+      for (int i = ranges[1][0] - 1; i < ranges[1][1]; ++i) 
+        inserted.push_back(targetTokenStream[i]);
+      DBs.push_back(DiffBlock(INSERT, inserted));
+      return;
     }
     default:
       return; // Bad format 
   }
-  block_list.push_back(db);
 }
 
-void DiffAlgorithm::processDiffControl(const std::string &changecmd, 
-                                       DiffBlock &db) {
+Operation DiffAlgorithm::processDiffControl(const std::string &changecmd, 
+                                            int ranges[2][2]) {
   const char *s = changecmd.c_str();
   // Read first set of digits 
-  s = readnum(skipwhite(s), &db.ranges[FILE0][RANGE_START]);
+  s = readnum(skipwhite(s), &ranges[0][0]);
   if (!s)
-    return;
+    return ERROR;
 
   // Was that the only digit? 
   s = skipwhite(s);
   if (*s == ',') {
-    s = readnum(s + 1, &db.ranges[FILE0][RANGE_END]);
+    s = readnum(s + 1, &ranges[0][1]);
     if (!s)
-      return;
-  } else {
-    db.ranges[FILE0][RANGE_END] = db.ranges[FILE0][RANGE_START];
+      return ERROR;
+  } else { 
+    ranges[0][1] = ranges[0][0];
   }
 
-  // Get the letter 
+  // Get the letter (operation)
+  Operation op;
   s = skipwhite(s);
   switch (*s) {
     case 'a':
-      db.operation = INSERT;
+      op = INSERT;
       break;
     case 'c':
-      db.operation = SUBST;
+      op = SUBST;
       break;
     case 'd':
-      db.operation = DELETE;
+      op = DELETE;
       break;
     default:
-      return; // Bad format 
+      return ERROR; // Bad format 
   }
   s++; // Past letter 
 
   // Read second set of digits 
-  s = readnum(skipwhite(s), &db.ranges[FILE1][RANGE_START]);
+  s = readnum(skipwhite(s), &ranges[1][0]);
   if (!s)
-    return;
+    return ERROR;
 
   // Was that the only digit?
   s = skipwhite(s);
   if (*s == ',') {
-    s = readnum(s + 1, &db.ranges[FILE1][RANGE_END]);
+    s = readnum(s + 1, &ranges[1][1]);
     if (!s)
-      return;
+      return ERROR;
     s = skipwhite(s); // To move to end
   } else {
-    db.ranges[FILE1][RANGE_END] = db.ranges[FILE1][RANGE_START];
+    ranges[1][1] = ranges[1][0];
   }
+
+  return op;
 }
 
-static inline const char DiffAlgorithm::*skipwhite(const char *s) {
+const char* DiffAlgorithm::skipwhite(const char *s) {
   while (*s == ' ' || *s == '\t') 
     s++;
   return s;
 }
   
-static inline const char DiffAlgorithm::*readnum(const char *s, int *pnum) {
+const char* DiffAlgorithm::readnum(const char *s, int *pnum) {
   unsigned char c = *s;
   int num = 0;
 

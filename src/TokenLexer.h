@@ -11,23 +11,39 @@
 #ifndef TOKENLEXER_H
 #define TOKENLEXER_H
 
+#include <map>
+#include <string>
+#include <vector>
+
+class Token;
+
+/* Flex variables. */
+#define TOK_WS 255
+extern int yylineno;
+extern int yyleng;
+extern const char *yytext;
+extern const char *yyfilename;
+extern int yylex();
+extern FILE *yyin;
+
 /// TokenLexer - This implements a lexer that returns tokens from a character
 ///              stream.
-class TokenLexer {
-  /// Equivalence classes 0 and 1 are permanently safe for sentinels.
-	/// Real equivalence classes start at 2
-  static int equivsIndex = 2;
-
-  /// Each token is mapped to a unique equivilence class.
-  std::map<std::string, int> equivclasses;
+class TokenLexer {  
+  std::map<std::string, int> tokenHashMap;
+  int nextHashValue;
 public:
-  /// TokenLexer constructor - Create a new TokenLexer object.
-  TokenLexer() {}
+  /// TokenLexer constructor - Create a new TokenLexer object with reserving
+  ///                          the default number of sentinel characters.
+  TokenLexer() : nextHashValue(2) {}
+
+  /// TokenLexer constructor - Create a new TokenLexer object with reserving
+  ///                          the specified number of sentinel characters.
+  explicit TokenLexer(int sentinels) : nextHashValue(sentinels) {}
 
   /// tokenize - Convert the stream of characters corresponding to the filename
   ///            into a stream of tokens. Reduce the tokens to a string of hashes 
   ///            where each Unicode character represents one token.
-  vector<Token> tokenize(const std::string &filename);
+  std::vector<Token> tokenize(const std::string &filename);
 };
 
 #endif // TOKENLEXER_H

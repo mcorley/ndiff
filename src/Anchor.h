@@ -1,4 +1,4 @@
-//===--- Anchor.h - Anchor interface --------------------------*- C++ -*-===//
+//===--- Anchor.h - A Common Substring of Tokens---------------*- C++ -*-===//
 //
 //                     The NDiff File Comparison Utility
 //
@@ -12,53 +12,60 @@
 #define ANCHOR_H
 
 class Anchor {
-  /// Start index of the first occurence of this Anchor.
-  unsigned StartIndex0;
+  /// Index marking the start of this Anchor in the source.
+  int source;
 
-  /// Start index of the second occurence of this Anchor.
-  unsigned StartIndex1;
+  /// Index marking the start of this Anchor in the target.
+  int target;
   
-  /// The number of tokens in the run.
-  unsigned Length;
+  /// Number of tokens identified in the run.
+  int len;
 public:
   /// Anchor constructor - Create a new Anchor object.
-  Anchor(unsigned StartIndex0, unsigned StartIndex1, unsigned Length)
-    : StartIndex0(StartIndex0), StartIndex1(StartIndex1), Length(Length)
-  {}
-
-  /// startIndex0 - Returns the start index of the first occurence 
-  //                of this Anchor.
-  unsigned startIndex0() const {
-    return StartIndex0;
+  Anchor(int idx0, int idx1, int len) 
+    : source(idx0), target(idx1), len(len) {
   }
 
-  /// startIndex1 - Returns the start index of the second occurence 
-  //                of this Anchor.
-  unsigned startIndex1 const {
-    return StartIndex1;
+  bool operator==(const Anchor &rhs) const { 
+    return (len == rhs.len && source == rhs.source && target == rhs.target);
   }
+  
+  bool operator<(const Anchor &rhs) const { return len < rhs.len; }
+  bool operator<=(const Anchor &rhs) const { return len <= rhs.len; }
+  bool operator!=(const Anchor &rhs) const { return !(*this == rhs); }
+  bool operator>(const Anchor &rhs) const { return rhs < *this; }
+  bool operator>=(const Anchor &rhs) const { return rhs <= *this; }
 
-  /// length - Returns the number of tokens in the run.
-  unsigned length const {
-    return Length;
-  }
+  /// sourceIdx - Returns the index designating the start of this Anchor 
+  ///             in the source token datastream.
+  int sourceIdx() const { return source; }
 
-  /// Is this Anchor equivalent to another Anchor?
-  bool operator==(const Anchor& A) const {
-    return (A.StartIndex0 == this->StartIndex0) && 
-      (A.StartIndex1 == this->StartIndex1) && 
-      (A.Length == this->Length);
-  }
+  /// targetIdx - Returns the index designating the start of this Anchor 
+  ///             in the target token datastream.
+  int targetIdx() const { return target; }
 
-  /// Is this Anchor not equivalent to another Anchor?
-  bool operator!=(const Anchor& A) const {
-    return !(operator == (A));
-  }
+  /// sourceIdxEnd - Returns the index designating the end of this Anchor 
+  ///                in the source token datastream.
+  int sourceIdxEnd() const { return source + len; }
 
-  /// Compare anchors by their length.
-  bool operator<(const Anchor& A) const {
-    return (this->Length < A.Length);
-  }
+  /// targetIdxEnd - Returns the index designating the end of this Anchor 
+  ///                in the target token datastream.
+  int targetIdxEnd() const { return target + len; }
+
+  /// length - Returns the number of tokens identified in this Anchor.
+  int length() const { return len; } 
 };
+
+/// compareSourceIndex - Returns true if the sequence identified by a1 occurs
+/// before the sequence identified by a2 in the source token stream.
+static bool compareSourceIndex(const Anchor &a1, const Anchor &a2) {
+  return (a1.sourceIdx() < a2.sourceIdx());
+}
+  
+/// compareTargetIndex - Returns true if the sequence identified by a1 occurs
+/// before the sequence identified by a2 in the target token stream
+static bool compareTargetIndex(const Anchor &a1, const Anchor &a2) {
+  return (a1.targetIdx() < a2.targetIdx());
+}
 
 #endif // ANCHOR_H

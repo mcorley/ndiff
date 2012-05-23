@@ -9,150 +9,150 @@
 //===----------------------------------------------------------------------===//
 
 #include "Anchor.h"
+#include "AnchorAnalysis.h"
 #include "SuffixArray.h"
 #include "Token.h"
-#include <std::vector>
+
 #include <algorithm>
 
-std::vector<Anchor> AnchorAnalysis::findAnchors(const std::vector<Token> &tokArray0,
-                                                const std::vector<Token> &tokArray1) {
-  const int leftFileLength = tokArray0.size();
-  const int rightFileLength = tokArray1.size();
+std::vector<Anchor> AnchorAnalysis::findAnchors(
+    const std::vector<Token> sourceTokenStream,
+    const std::vector<Token> targetTokenStream) {
 
-  // Build the suffix array data structure.
-  SuffixArray sa;
-  sa.init(tokArray0, tokArray1);
-  const std::vector<int> indexpoints(sa.indexPoints());
-  const std::vector<int> lcpArray(sa.lcpArray());
-  const std::vector<int> sortedLcpArray(sa.sortedLcpArray());
+  const int sourceTokenStreamSize = sourceTokenStream.size();
+  const int targetTokenStreamSize = targetTokenStream.size();
 
-	std::vector<Anchor> crossanchs, selfanchs0, selfanchs1;
-  std::vector<int>::reverse_iterator lcp(sortedLcpArray.rbegin()), 
-                                end(sortedLcpArray.rend());
-  for (; lcp != end; ++lcp) {
-    // Lookup the index of the max valued lcp in the lcpArray. Using this we can
-    // find the two start indexes of the runs, and their length.
-		const int k = distance(lcpArray.begin(), 
-                           find(lcpArray.begin(), lcpArray.end(), *lcp));
-    const int runBegin0 = indexpoints[k]; // Begining of first instance
-    const int runBegin1 = indexpoints[k-1]; // Begining of second instance
-    const int runLength = lcpArray[k]; // Length of the run.
+  SuffixArray sa(sourceTokenStream, targetTokenStream);
+  std::vector<int> indexPoints = sa.orderedIndexPoints();
+  std::vector<int> LCPs        = sa.LCPs();
+  std::vector<int> orderedLCPs = sa.orderedLCPs();
 
-    // If both runs begin in the first file, construct a self-anchor 
-    // for file0 and insert its length into the list if it's maximal.
-    if ((runBegin0 < leftFileLength) && (runBegin1 < leftFileLength)) {
-      Anchor anchToAdd(runBegin0, runBegin1, run_length);
-      if (isMaximal(anchToAdd, selfanchs0)) 
-        selfanchs0.push_back(anchToAdd);
+  std::vector<Anchor> crossAnchors, sourceAnchors, targetAnchors;
 
-      // If both runs begin in the second file, construct a self-anchor 
-      // for file1 and insert its length into the list if it's maximal.
-    } else if ((leftFileLength < runBegin0) && (leftFileLength < runBegin1)) {
-      Anchor anchToAdd(runBegin0 - leftFileLength - 1, 
-                       runBegin1 - leftFileLength - 1, 
-                       runLength);
-      if (isMaximal(anchToAdd, selfanchs1))
-        selfanchs1.push_back(anchToAdd);
-    } else { 
-      // Construct a cross-anchor and insert if it's maximal. It is not
-      // always true that the first instance of a cross-anchor will begin
-      // in the first file, so we need to check which file the first 
-      // instance begins in to setup our anchor correctly.
-      if ((runBegin0 < leftFileLength) && (leftFileLength < runBegin1)) {
-        Anchor anchToAdd(runBegin0, runBegin1 - leftFileLength - 1, runLength);
-        if (isMaximal(anchToAdd, crossanchs))
-          crossanchs.push_back(anchToAdd);
-      } else { // First instance begins in the second file!!
-        Anchor anchToAdd(runBegin1, runBegin0 - leftFileLength - 1, runLength);
-        if (isMaximal(anchToAdd, crossanchs))
-          crossanchs.push_back(anchToAdd);
+  std::vector<int>::reverse_iterator 
+    i(orderedLCPs.rbegin()), e(orderedLCPs.rend());
+  for (; i != e; ++i) {
+    const int LCP = *i;
+    const int idx = distance(LCPs.begin(), find(LCPs.begin(), LCPs.end(), LCP));
+    const int x = indexPoints[idx];
+    const int y = indexPoints[idx - 1];
+    const int len = LCPs[idx];
+
+    // First check for self-anchors. Self-anchors represent the common 
+    // substrings found when considering a file with itself. They give us a 
+    // way to express self similarity by providing a measure on the 
+    // distribution of common substrings for that file. By getting an idea of 
+    // how similar two files are with themselves, we can get a better feel for 
+    // the statistical significance of common substrings between two files to
+    // later set some threshold level.
+    //
+    // We say an anchor is a self anchor from the source stream when both
+    // indexes x and y are found in the source stream.
+    //
+    // We say an anchor is a self anchor from the target stream when both
+    // indexes x and y are found in the target stream.
+    if ((x < sourceTokenStreamSize) && (y < sourceTokenStreamSize)) {
+      Anchor srcAnch(x, y, len);
+      if (isMaximal(srcAnch, sourceAnchors)) 
+        sourceAnchors.push_back(srcAnch);
+    } else if ((sourceTokenStreamSize < x) && (sourceTokenStreamSize < y)) {
+      Anchor tgtAnch(x - sourceTokenStreamSize - 1, y - sourceTokenStreamSize - 1, len);
+      if (isMaximal(tgtAnch, targetAnchors)) 
+        targetAnchors.push_back(tgtAnch);
+    } else {
+      // Check for a maximal cross anchor. Cross anchors represent common 
+      // substrings between two files. We need to consider two cases here:
+      //  1) When x is in the source stream and y is in the target stream
+      //  2) When y is in the source stream and x is in the target stream
+      if ((x < sourceTokenStreamSize) && (sourceTokenStreamSize < y)) {
+        Anchor anch(x, y - sourceTokenStreamSize - 1, len);
+        if (isMaximal(anch, crossAnchors))
+          crossAnchors.push_back(anch);
+      }
+      else if ((y < sourceTokenStreamSize) && (sourceTokenStreamSize < x)) {
+        Anchor anch(y, x - sourceTokenStreamSize - 1, len);
+        if (isMaximal(anch, crossAnchors))
+          crossAnchors.push_back(anch);
       }
     }
-		// Invalidate the current sa.lcpArray() entry.
-		lcpArray[k] = -1;
-	}
+    // Invalidate the current LCP entry.
+		LCPs[idx] = -1;
+  }
 
   // Some anchors might have been identifed because we were looking at such 
   // small blocks that the probability they will be common to both files is 
   // high, rather than because these are actually two common blocks preserved
   // across. Detect them now and avoid considering them for the rest of the 
   // comparison algorithm.
-  discardConfusingAnchors(selfanchs0, selfanchs1, crossanchs);  
-	return crossanchs;
+  discardConfusingAnchors(sourceAnchors, targetAnchors, crossAnchors);  
+	return crossAnchors;
 }
 
-void AnchorAnalysis::discardConfusingAnchors(const std::vector<Anchor> &selfAnchs0, 
-                                             const std::vector<Anchor> &selfAnchs1, 
-                                             std::vector<Anchor> &crossAnchs) {
-  discardConfusingAnchorsI(selfAnchs0, selfAnchs1, crossAnchs);
-  std::vector<Anchor> perm0(crossAnchs), perm1(crossAnchs);
-  sort(perm0.begin(), perm0.end(), compareFirstInstance);
-  sort(perm1.begin(), perm1.end(), compareSecondInstance);
-  crossAnchs = (perm0 == perm1) ? perm0 : alignAnchors(perm0, perm1);
+void AnchorAnalysis::discardConfusingAnchors(const std::vector<Anchor> &sourceAnchors, 
+                                             const std::vector<Anchor> &targetAnchors, 
+                                             std::vector<Anchor> &crossAnchors) {
+  discardConfusingAnchorsI(sourceAnchors, targetAnchors, crossAnchors);
+  std::vector<Anchor> perm0(crossAnchors), perm1(crossAnchors);
+  std::sort(perm0.begin(), perm0.end(), compareSourceIndex);
+  std::sort(perm1.begin(), perm1.end(), compareTargetIndex);
+  crossAnchors = (perm0 == perm1) ? perm0 : alignAnchors(perm0, perm1);
 }
 
-void AnchorAnalysis::discardConfusingAnchorsI(const std::vector<Anchor> &selfAnchs0, 
-                                              const std::vector<Anchor> &selfAnchs1, 
-                                              std::vector<Anchor> &crossAnchs) {
-  const int maxself0 = !selfAnchs0.empty() ? selfAnchs0.front().length : 0;
-  const int maxself1 = !selfAnchs1.empty() ? selfAnchs1.front().length : 0;
+void AnchorAnalysis::discardConfusingAnchorsI(const std::vector<Anchor> &sourceAnchors, 
+                                              const std::vector<Anchor> &targetAnchors, 
+                                              std::vector<Anchor> &crossAnchors) {
+  const int maxself0 = !sourceAnchors.empty() ? sourceAnchors.front().length() : 0;
+  const int maxself1 = !targetAnchors.empty() ? targetAnchors.front().length() : 0;
   int thresh = (maxself0 > maxself1) ? maxself0 : maxself1; 
 
   // Discard anchors falling below the computed threshold.
-	while (!crossAnchs.empty() && crossAnchs.back().length < thresh)
-		crossAnchs.pop_back();
+	while (!crossAnchors.empty() && crossAnchors.back().length() < thresh)
+		crossAnchors.pop_back();
 }
 
-void AnchorAnalysis::discardConfusingAnchorsII(const std::vector<Anchor> &selfAnchs0, 
-                                               const std::vector<Anchor> &selfAnchs1, 
-                                               std::vector<Anchor> &crossAnchs) {
-  std::vector<Anchor> lcps;
-  lcps.insert(lcps.end(), selfAnchs0.begin(), selfAnchs0.end());
-  lcps.insert(lcps.end(), selfAnchs1.begin(), selfAnchs1.end());
-  lcps.insert(lcps.end(), crossAnchs.begin(), crossAnchs.end());
+void AnchorAnalysis::discardConfusingAnchorsII(const std::vector<Anchor> &sourceAnchors, 
+                                               const std::vector<Anchor> &targetAnchors, 
+                                               std::vector<Anchor> &crossAnchors) {
+  std::vector<Anchor> anchs;
+  anchs.insert(anchs.end(), sourceAnchors.begin(), sourceAnchors.end());
+  anchs.insert(anchs.end(), targetAnchors.begin(), targetAnchors.end());
+  anchs.insert(anchs.end(), crossAnchors.begin(), crossAnchors.end());
 
-	// Set intitial threshold == length of longest anchor.
-	int thresh = crossAnchs.front().length, saved_thresh = 0;
-	
-	do { // Lloyd's algorithm.
-		saved_thresh = thresh; // save last computed thresh to compare
+	int thresh = crossAnchors.front().length(), savedThresh = 0;
+	do {		
 		// Partition the anchors into two sets by comparing 
     // their lengths to the current threshold level.
+    savedThresh = thresh;
 		int m1 = 0, m2 = 0, nBelow = 0, nAbove = 0;
-		std::vector<Anchor>::iterator lcp(lcps.begin()), end(lcps.end());
-		for (; lcp != end; ++lcp) {
-			if ((*lcp).length > thresh) {
-				++nAbove;
-				m2 += (*lcp).length;
-			} else { 
-				++nBelow;
-				m1 += (*lcp).length;
-			}
+		std::vector<Anchor>::iterator i(anchs.begin()), e(anchs.end());
+		for (; i != e; ++i) {
+      const int len = (*i).length();
+			if (len > thresh) { ++nAbove;  m2 += len; } 
+      else { ++nBelow;  m1 += len; }
 		}
-		// Compute the average anchor length for both sets.
 		m1 = (nBelow > 0) ? m1 / nBelow : 0;
 		m2 = (nAbove > 0) ? m2 / nAbove : 0;
-		thresh = (m1+m2) / 2; // new thresh = the average of m1 and m2
-	} while (thresh != saved_thresh);
+		thresh = (m1+m2) / 2; 
+	} while (thresh != savedThresh);
 
   // Discard anchors falling below the computed threshold.
-	while (!crossAnchs.empty() && crossAnchs.back().length < thresh)
-		crossAnchs.pop_back();
+	while (!crossAnchors.empty() && crossAnchors.back().length() < thresh)
+		crossAnchors.pop_back();
 }
 
-std::vector<Anchor> alignAnchors(const std::vector<Anchor> &perm0, 
-                                 const std::vector<Anchor> &perm1) {
+std::vector<Anchor> AnchorAnalysis::alignAnchors(const std::vector<Anchor> &perm0, 
+                                                 const std::vector<Anchor> &perm1) {
 	const int nAnchs = perm0.size();
-	std::vector<std::vector<int> > lcs_table(nAnchs+1);
+	std::vector<std::vector<int> > LCSTable(nAnchs+1);
   for (int i = 0, e = nAnchs + 1; i < e; ++i)
-    lcs_table[i].resize(nAnchs+1);
+    LCSTable[i].resize(nAnchs+1);
 	
 	for (int i = nAnchs - 1; i >= 0; --i) {
 		for (int j = nAnchs - 1; j >= 0; --j) {
 			if (perm0[i] == perm1[j]) 
-        lcs_table[i][j] = lcs_table[i+1][j+1]+1;
+        LCSTable[i][j] = LCSTable[i+1][j+1]+1;
       else 
-        lcs_table[i][j] = max(lcs_table[i+1][j], lcs_table[i][j+1]);
+        LCSTable[i][j] = std::max(LCSTable[i+1][j], LCSTable[i][j+1]);
     }
 	}
   std::vector<Anchor> anchList;
@@ -161,7 +161,7 @@ std::vector<Anchor> alignAnchors(const std::vector<Anchor> &perm0,
     if (perm0[i] == perm1[j]) {
       anchList.push_back(perm0[i]);
       i++; j++;
-    } else if (lcs_table[i][j+1] < lcs_table[i+1][j]) {
+    } else if (LCSTable[i][j+1] < LCSTable[i+1][j]) {
       ++i;
     } else {
       ++j;
@@ -171,30 +171,32 @@ std::vector<Anchor> alignAnchors(const std::vector<Anchor> &perm0,
 }
 
 bool AnchorAnalysis::isMaximal(const Anchor &anch, 
-                               const std::vector<Anchor> &anchList) {
-  const int anch_begin0 = anchToCheck.index0;
-  const int anch_begin1 = anchToCheck.index1;
-  const int anch_end0 = anchToCheck.index0 + anchToCheck.length;
-  const int anch_end1 = anchToCheck.index1 + anchToCheck.length;
+                               const std::vector<Anchor> &anchors) {
+  const int firstBegin = anch.sourceIdx(),
+            firstEnd = anch.sourceIdx() + anch.length();
 
-  std::vector<Anchor>::const_iterator pAnch(anchList.begin()),
-                                 end(anchList.end());
-  for (; pAnch != end; ++pAnch) {
-    const int base_water_mark0 = (*pAnch).index0;
-    const int base_water_mark1 = (*pAnch).index1;
-    const int high_water_mark0 = (*pAnch).index0 + (*pAnch).length;
-    const int high_water_mark1 = (*pAnch).index1 + (*pAnch).length;
+  const int secondBegin = anch.targetIdx(),
+            secondEnd = anch.targetIdx() + anch.length();
 
-    // Check bounds from first instance.
-		if ((base_water_mark0 <= anch_begin0) && (anch_begin0 < high_water_mark0))
-      return false;
-    if ((base_water_mark0 <= anch_end0) && (anch_end0 < high_water_mark0))
-      return false;
+  std::vector<Anchor>::const_iterator i(anchors.begin()), e(anchors.end());
+  for (; i != e; ++i) {
+    const int firstLowBound = (*i).sourceIdx(),
+              firstUpBound = (*i).sourceIdx() + (*i).length();
 
-    // Check bounds from second instance.
-		if ((base_water_mark1 <= anch_begin1) && (anch_begin1 < high_water_mark1))
+    const int secondLowBound = (*i).targetIdx(),
+              secondUpBound = (*i).targetIdx() + (*i).length();
+
+		if ((firstLowBound <= firstBegin) && 
+        (firstBegin < firstUpBound)) 
       return false;
-    if ((base_water_mark1 <= anch_end1) && (anch_end1 < high_water_mark1))
+    if ((firstLowBound <= firstEnd) && 
+        (firstEnd < firstUpBound)) 
+      return false;
+		if ((secondLowBound <= secondBegin) && 
+        (secondBegin < secondUpBound)) 
+      return false;
+    if ((secondLowBound <= secondEnd) && 
+        (secondEnd < secondUpBound)) 
       return false;
   }
 	return true;
